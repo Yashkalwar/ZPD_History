@@ -1,0 +1,32 @@
+[
+    {
+        "id": "chapter_1",
+        "title": "International relations in an age of imperialism 1871–1918",
+        "start_page": 6,
+        "end_page": 39
+    },
+    {
+        "id": "chapter_2",
+        "title": "International relations in an age of uncertainty 1919–33",
+        "start_page": 40,
+        "end_page": 67
+    },
+    {
+        "id": "chapter_3",
+        "title": "International relations in an age of extremism 1919–39",
+        "start_page": 68,
+        "end_page": 101
+    },
+    {
+        "id": "chapter_4",
+        "title": "China and Japan in an age of development 1919–45",
+        "start_page": 102,
+        "end_page": 129
+    },
+    {
+        "id": "chapter_5",
+        "title": "The search for international peace and security 1919–45",
+        "start_page": 130,
+        "end_page": 159
+    }
+]
