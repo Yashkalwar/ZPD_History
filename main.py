@@ -8,22 +8,26 @@ from dotenv import load_dotenv
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_core.messages import HumanMessage, SystemMessage
 
+# Load environment variables
 load_dotenv()
 
+# --- Constants ---
 BASE_DIR = Path(__file__).resolve().parent
 PDF_PATH = BASE_DIR / "data" / "raw" / "history.pdf"
 VECTORSTORE_PATH = BASE_DIR / "data" / "faiss_index_optimized"
 CHAPTER_MAP_PATH = BASE_DIR / "data" / "raw" / "chapter_map.json"
 
+# --- Utility Functions ---
 def check_environment():
     """Checks for the OpenAI API key in the environment variables."""
     if not os.getenv("OPENAI_API_KEY"):
@@ -69,7 +73,7 @@ def extract_text_with_metadata(pdf_path: Path, chapter_map: list[dict]) -> list[
                     if chapter_info["start_page"] <= page_num <= chapter_info["end_page"]:
                         current_chapter_id = chapter_info["id"]
                         current_chapter_title = chapter_info["title"]
-                        break 
+                        break
                 if text:
                     docs.append(Document(
                         page_content=text,
@@ -121,7 +125,7 @@ def load_retriever_and_reranker(embeddings_model, query_instruction: str, select
              sys.exit(1)
         vectorstore = FAISS.load_local(str(VECTORSTORE_PATH), embeddings_model, allow_dangerous_deserialization=True)
 
-        search_kwargs = {"k": 10} 
+        search_kwargs = {"k": 10}
         if selected_chapter_id and selected_chapter_id != "all":
             print(f"Filtering retrieval for chapter: {selected_chapter_id}")
             search_kwargs["filter"] = {"chapter_id": selected_chapter_id}
@@ -159,34 +163,49 @@ ANSWER:
     print("QA chain setup complete.")
     return qa_chain
 
-def generate_question_from_chapter_content(retriever, llm, selected_chapter_title: str):
+def generate_question_from_chapter_content(retriever, llm, selected_chapter_title: str, previous_questions: set = None):
     """
-    Generates a question and its expected answer based on content retrieved
+    Generates a unique question and its expected answer based on content retrieved
     from a specific chapter or the entire document, focusing on historical facts/events.
     """
+    if previous_questions is None:
+        previous_questions = set()
+        
     display_context_name = f"from {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "from the document"
-    retrieval_query_base = "key historical events, figures, causes, or effects relevant to a short answer question"
-    retrieval_query = f"{retrieval_query_base} from '{selected_chapter_title}'" if selected_chapter_title != "All Chapters" else retrieval_query_base
+    
+    query_variations = [
+        "specific historical events with exact dates", "key political figures and their roles",
+        "important treaties, agreements, or alliances", "major military conflicts or battles",
+        "significant social or economic developments", "cultural or technological advancements",
+        "diplomatic relations between countries", "causes and consequences of major events",
+        "quotes from important historical figures", "changes in political systems or governments"
+    ]
+    if selected_chapter_title != "All Chapters":
+        query_variations = [f"{q} in {selected_chapter_title}" for q in query_variations]
+    
+    import random
+    retrieval_query = f"{random.choice(query_variations)} {random.choice(['focusing on different aspects', 'with specific details', 'that\'s not commonly known', 'that tests deeper understanding', 'with precise historical context'])} that would make a good quiz question"
     context_description = f"Context {display_context_name}:"
 
     print(f"\n🧠 Generating a question {display_context_name}...")
     try:
-        retrieved_docs = retriever.get_relevant_documents(retrieval_query)
+        retrieved_docs = retriever.get_relevant_documents(retrieval_query, k=10)
         if not retrieved_docs:
             print("No relevant documents found for question generation.")
             return None, None, None
+            
+        random.shuffle(retrieved_docs)
+        context = "\n---\n".join([doc.page_content for doc in retrieved_docs[:3]])
 
-        context = "\n".join([doc.page_content for doc in retrieved_docs[:5]])
-
-        generation_prompt_template = """You are a history quiz master creating exam-style questions.
-Based *strictly and specifically* on the following historical text, generate a single, concise, open-ended question.
-The question *must be directly and fully answerable from the provided context*.
-Focus on a central theme, a significant event, a key cause, a specific effect, or an important figure explicitly discussed in the provided text.
-The question should be concise and designed to elicit a factual, one-line answer, typical of a low-mark exam question.
-Avoid general overview questions if the context provides specific details.
+        generation_prompt_template = """You are a history quiz master creating unique exam-style questions with strict one-line answers.
+Based *strictly and specifically* on the following historical text, generate a single, concise question.
+The question MUST be answerable in exactly one line and directly from the provided context.
+Focus on specific facts, dates, names, or events that have definitive, concise answers.
+The answer must be a single fact or phrase that fits in one line (max 15 words).
+Do NOT generate questions that require explanations, lists, or multiple sentences as answers.
 Do NOT add phrases like "in this chapter" or "from the text" at the end of the question.
-
-Also, provide the direct and factual answer to that question based *only* on the provided context. The answer should also be concise and suitable for a one-line response.
+Make sure the question is different from these previous questions: {previous_questions}
+Generate a completely new question and its one-line answer based *only* on the provided context.
 
 {context_description}
 {context}
@@ -196,11 +215,21 @@ Question: <Your generated historical question here>
 Answer: <The direct historical answer to your question here>
 """
         
-        chain = PromptTemplate(template=generation_prompt_template, input_variables=["context", "context_description"]) | llm 
-        llm_response = chain.invoke({"context": context, "context_description": context_description})
+        temp_llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0.7, api_key=os.getenv("OPENAI_API_KEY"))
+        
+        prompt = generation_prompt_template.format(
+            context=context,
+            context_description=context_description,
+            previous_questions='\n- '.join(previous_questions) if previous_questions else 'No previous questions'
+        )
+        
+        llm_response = temp_llm.invoke([
+            SystemMessage(content="You are a history quiz master creating unique questions."),
+            HumanMessage(content=prompt)
+        ])
         
         response_text = llm_response.content
-        question_match = re.search(r"Question: (.*)", response_text, re.DOTALL) 
+        question_match = re.search(r"Question: (.*)", response_text, re.DOTALL)
         answer_match = re.search(r"Answer: (.*)", response_text, re.DOTALL)
 
         generated_question = question_match.group(1).strip() if question_match else "Could not generate a question."
@@ -216,34 +245,84 @@ Answer: <The direct historical answer to your question here>
         print(f"Error generating question: {e}")
         return None, None, None
 
-def get_feedback_on_answer(user_answer: str, expected_answer: str, question: str, llm):
-    """Compares the user's answer to the expected answer and provides concise feedback."""
-    print("\n🧐 Analyzing your answer...")
-    feedback_prompt_template = """You are an AI tutor providing feedback on a student's answer to a history question.
-Here is the original question asked: "{question}"
-Compare the user's answer to the expected correct answer. Your evaluation should be based on whether the user's answer provides the core factual information requested by the question.
-Crucially:
-- If the original question already specifies details like location, year, or context (e.g., "in 1936", "in Spain", "that challenged the Treaty of Versailles"), the user's answer DOES NOT need to explicitly repeat those details to be considered correct. Focus on the core event, person, or concept being asked about.
-- DO NOT introduce any external information, details, or topics not directly related to THIS SPECIFIC question, user answer, and expected answer.
-- Ensure your feedback is directly relevant to the user's answer in relation to the expected answer, considering the information already present in the question.
-Provide a one-line feedback response.
-Categorize the feedback as:
-- 'Correct' if the user's answer fully captures the essential information required to answer the question, considering the context already provided in the question.
-- 'Partially Correct' if the user's answer has some correct elements but misses key factual information or contains minor inaccuracies based on the expected answer.
-- 'Incorrect' if the user's answer is largely wrong or completely misses the point.
-If 'Partially Correct' or 'Incorrect', briefly state the main reason or what was missed, focusing on conciseness. Do not reveal the full correct answer.
-Expected Answer: {expected_answer}
-User's Answer: {user_answer}
-Feedback:"""
-
-    feedback_chain = PromptTemplate(template=feedback_prompt_template, input_variables=["expected_answer", "user_answer", "question"]) | llm
+def analyze_student_answer(question: str, context: str, student_answer: str, expected_answer: str, llm) -> dict:
+    """
+    Analyzes the student's answer and categorizes it as correct, partially correct, or wrong.
+    Returns a dictionary with analysis results.
+    """
     try:
-        feedback_text = feedback_chain.invoke({"expected_answer": expected_answer, "user_answer": user_answer, "question": question}).content.strip()
-        print(f"Feedback: {feedback_text}") 
-        return feedback_text
+        analysis_prompt = """You are a helpful history tutor evaluating a student's answer. Analyze the following:
+        
+        Question: {question}
+        Context: {context}
+        Expected Answer: {expected_answer}
+        Student's Answer: {student_answer}
+        
+        Your task is to:
+        1. Be encouraging and focus on the learning process.
+        2. If the answer is close but not exactly right, consider it 'partially_correct'.
+        3. For 'partially_correct' answers:
+           - 'explanation' should only state "Your answer is partially correct."
+           - 'suggestion' should guide them to think differently without revealing the answer directly.
+              - Focus on the type of information they're missing (e.g., "Think about other countries involved")
+              - Ask guiding questions (e.g., "What other regions were part of this plan?")
+              - Point to general themes or categories (e.g., "Consider both western and eastern expansion")
+        4. For 'wrong' answers:
+           - 'explanation' should only state "Your answer is incorrect."
+           - 'suggestion' should provide a very general nudge (e.g., "Review the key events of this period")
+        5. Never repeat the expected answer or key terms from it in the suggestion.
+
+        Return your analysis in this exact JSON format:
+        {
+            "verdict": "correct|partially_correct|wrong",
+            "explanation": "A brief response based on the rules above.",
+            "suggestion": "A subtle hint that guides without giving away the answer."
+        }
+        
+        Remember: The goal is to make them think, not to tell them the answer.
+        """
+        
+        messages = [
+            SystemMessage(content=analysis_prompt),
+            HumanMessage(content=json.dumps({
+                "question": question, "context": context,
+                "expected_answer": expected_answer, "student_answer": student_answer
+            }))
+        ]
+        
+        response = llm.invoke(messages, temperature=0.7)
+        
+        try:
+            analysis = json.loads(response.content.strip()) if hasattr(response, 'content') else json.loads(response)
+            return analysis
+        except json.JSONDecodeError as je:
+            print(f"JSON decode error: {je}\nRaw response: {response.content if hasattr(response, 'content') else response}")
+            raise
+        
     except Exception as e:
-        print(f"Error getting feedback: {e}")
-        return "Could not generate feedback."
+        print(f"Error analyzing answer: {e}\nType: {type(e).__name__}\nArgs: {e.args}")
+        return {
+            "verdict": "wrong", # Default to wrong if an error occurs
+            "explanation": "Your answer could not be fully analyzed.",
+            "suggestion": "Consider reviewing the topic for key details."
+        }
+
+def get_feedback_on_answer(user_answer: str, expected_answer: str, question: str, llm, context: str = ""):
+    """
+    Compares the user's answer to the expected answer and provides detailed feedback.
+    Returns a tuple of (feedback_message, is_correct, analysis)
+    """
+    if not user_answer.strip():
+        return "Please provide an answer.", False, None
+        
+    analysis = analyze_student_answer(question, context, user_answer, expected_answer, llm)
+    
+    if analysis["verdict"] == "correct":
+        return f"✅ Correct! {analysis['explanation']}", True, analysis
+    elif analysis["verdict"] == "partially_correct":
+        return f"⚠️ Partially Correct. {analysis['explanation']}", False, analysis
+    else:  # wrong
+        return f"❌ Incorrect. {analysis['explanation']}", False, analysis
 
 def ask_question(qa_chain, question):
     """
@@ -270,6 +349,7 @@ def ask_question(qa_chain, question):
     except Exception as e:
         print(f"An error occurred while asking the question: {e}")
 
+# --- Main Application Logic ---
 def main():
     """Main function to run the RAG system."""
     check_environment()
@@ -282,7 +362,7 @@ def main():
     
     if not VECTORSTORE_PATH.exists():
         print("Vector store not found. Starting the data ingestion process...")
-        documents = extract_text_with_metadata(PDF_PATH, chapter_map_data) 
+        documents = extract_text_with_metadata(PDF_PATH, chapter_map_data)
         chunks = split_documents(documents)
         create_and_save_vectorstore(chunks)
     else:
@@ -293,7 +373,7 @@ def main():
         query_instruction="Represent this sentence for searching relevant passages:"
     )
     
-    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7, max_tokens=1500) # Reusing this LLM instance
+    llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0.7, max_tokens=1500)
 
     print("\nAvailable Chapters:")
     print("0. All Chapters (Quiz Mode - questions from entire document)")
@@ -318,7 +398,7 @@ def main():
     print(f"You selected: {selected_chapter_title} for quiz mode.")
 
     retriever = load_retriever_and_reranker(embeddings_model, embeddings_model.query_instruction, selected_chapter_id)
-    qa_chain = setup_qa_chain(llm, retriever) # qa_chain setup remains, but not directly used by quiz generation/feedback
+    qa_chain = setup_qa_chain(llm, retriever)
     
     print("\n✅ RAG System is Ready. Type 'exit' to quit at any question prompt.")
 
@@ -331,7 +411,7 @@ def main():
             
             for attempt in range(max_retries_for_unique_question):
                 temp_question, temp_answer, temp_display_name = generate_question_from_chapter_content(
-                    retriever, llm, selected_chapter_title
+                    retriever=retriever, llm=llm, selected_chapter_title=selected_chapter_title, previous_questions=asked_questions_history
                 )
                 
                 if temp_question and temp_answer and temp_question != "Could not generate a question.":
@@ -346,15 +426,32 @@ def main():
                     break
             
             if generated_question and expected_answer and generated_question != "Could not generate a question.":
-                print(f"\nHere's a question for you {display_context_name}:\nQuestion: {generated_question}")
+                print(f"\nHere's a question for you {display_context_name}:")
+                print(f"Question: {generated_question}")
                 user_answer = input("Your answer (or 'exit'): ").strip()
 
                 if user_answer.lower() == 'exit':
                     break
 
                 if user_answer:
-                    print(f"\n--- Expected Answer (for reference): {expected_answer}") 
-                    get_feedback_on_answer(user_answer, expected_answer, generated_question, llm)
+                    retrieved_docs = retriever.get_relevant_documents(generated_question)
+                    context = "\n".join([doc.page_content for doc in retrieved_docs[:2]])
+                    
+                    feedback, is_correct, analysis = get_feedback_on_answer(
+                        user_answer=user_answer, expected_answer=expected_answer,
+                        question=generated_question, llm=llm, context=context
+                    )
+                    
+                    print("\n---")
+                    print(f"Your answer: {user_answer}")
+                    print(f"\n{feedback}")
+                    
+                    if not is_correct: # For both partially_correct and wrong answers
+                        if input("\nWould you like a hint? (yes/no): ").lower().strip() == 'yes':
+                            print(f"\n💡 Hint: {analysis['suggestion']}")
+                        
+                        if input("\nWould you like to see the full answer? (yes/no): ").lower().strip() == 'yes':
+                            print(f"\nThe full correct answer is: {expected_answer}")
                 else:
                     print("You didn't provide an answer.")
                 
@@ -363,7 +460,7 @@ def main():
             else:
                 print("Could not generate a relevant question after multiple attempts. This might happen if the selected content is too sparse for specific questions.")
                 if input("Try generating another question? (yes/no): ").lower().strip() != 'yes':
-                    break 
+                    break
 
         except (KeyboardInterrupt, EOFError):
             print("\nExiting...")
