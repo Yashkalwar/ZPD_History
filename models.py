@@ -20,7 +20,7 @@ class UserZPD(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey('users.id'))
-    zpd_score = Column(Float, default=5.5)  # 1.0 to 10.0 scale
+    zpd_score = Column(Float, default=9.5)  # 1.0 to 10.0 scale
     performance_history = Column(JSON, default=list)  # Stores list of recent scores (0.0 to 1.0)
     
     # Relationship back to User

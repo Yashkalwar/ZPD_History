@@ -15,10 +15,10 @@ class ZPDCalculator:
         user_zpd = self.db.query(UserZPD).filter(UserZPD.user_id == user_id).first()
         
         if not user_zpd:
-            # Start new users at 5.5 (middle of the scale)
+            # Start new users at 9.5 (middle of the scale)
             user_zpd = UserZPD(
                 user_id=user_id,
-                zpd_score=5.5,
+                zpd_score=9.5,
                 performance_history=[]
             )
             self.db.add(user_zpd)
@@ -54,7 +54,7 @@ class ZPDCalculator:
         if not user_zpd:
             user_zpd = UserZPD(
                 user_id=user_id,
-                zpd_score=5.5,  # Start in the middle
+                zpd_score=9.5,  # Start in the middle
                 performance_history=[]
             )
             self.db.add(user_zpd)

@@ -4,6 +4,7 @@ import re
 import json
 from pathlib import Path
 import fitz  # PyMuPDF
+import random
 from dotenv import load_dotenv
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -163,166 +164,276 @@ ANSWER:
     print("QA chain setup complete.")
     return qa_chain
 
-def generate_question_from_chapter_content(retriever, llm, selected_chapter_title: str, previous_questions: set = None):
+def generate_question_from_chapter_content(retriever, llm, selected_chapter_title: str, previous_questions: set = None, zpd_score: float = 2.5):
     """
     Generates a unique question and its expected answer based on content retrieved
-    from a specific chapter or the entire document, focusing on historical facts/events.
+    from a specific chapter or the entire document, with difficulty adjusted by ZPD score.
+    
+    Args:
+        retriever: The document retriever
+        llm: The language model to use
+        selected_chapter_title: Title of the chapter to generate questions from
+        previous_questions: Set of previously asked questions to avoid repetition
+        zpd_score: The user's Zone of Proximal Development score (1.0-10.0)
+        
+    Returns:
+        tuple: (question, answer, difficulty_level)
     """
     if previous_questions is None:
         previous_questions = set()
-        
-    display_context_name = f"from {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "from the document"
     
-    query_variations = [
-        "specific historical events with exact dates", "key political figures and their roles",
-        "important treaties, agreements, or alliances", "major military conflicts or battles",
-        "significant social or economic developments", "cultural or technological advancements",
-        "diplomatic relations between countries", "causes and consequences of major events",
-        "quotes from important historical figures", "changes in political systems or governments"
-    ]
-    if selected_chapter_title != "All Chapters":
-        query_variations = [f"{q} in {selected_chapter_title}" for q in query_variations]
-    
-    import random
-    retrieval_query = f"{random.choice(query_variations)} {random.choice(['focusing on different aspects', 'with specific details', 'that\'s not commonly known', 'that tests deeper understanding', 'with precise historical context'])} that would make a good quiz question"
-    context_description = f"Context {display_context_name}:"
+    # Determine difficulty level based on ZPD score
+    if zpd_score < 4.0:  # Beginner level (1.0-3.9)
+        difficulty = "beginner"
+        query = f"Key events, dates, and people in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Important historical facts"
+        instruction = "Create a straightforward factual question that tests recall of basic information. Focus on who, what, when, where questions."
+    elif zpd_score < 7.5:  # Intermediate level (4.0-7.4)
+        difficulty = "intermediate"
+        query = f"Causes, effects, and relationships in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Historical cause-effect relationships"
+        instruction = "Create a question that requires understanding of how and why things happened, or comparing different events or perspectives."
+    else:  # Advanced level (7.5-10.0)
+        difficulty = "advanced"
+        query = f"Complex analysis, multiple perspectives, and long-term impacts in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Complex historical analysis"
+        instruction = "Create a thought-provoking question that requires critical analysis, evaluation of evidence, or synthesis of multiple concepts."
 
-    print(f"\n🧠 Generating a question {display_context_name}...")
+    print(f"\n🧠 Generating a {difficulty}-level question from {selected_chapter_title}...")
+    
     try:
-        retrieved_docs = retriever.get_relevant_documents(retrieval_query, k=10)
+        # Retrieve relevant context
+        retrieved_docs = retriever.get_relevant_documents(query, k=5)
         if not retrieved_docs:
-            print("No relevant documents found for question generation.")
-            return None, None, None
+            raise ValueError("No relevant documents found for the query.")
             
-        random.shuffle(retrieved_docs)
-        context = "\n---\n".join([doc.page_content for doc in retrieved_docs[:3]])
+        context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+        
+        # Generate question and answer specific to the difficulty level
+        prompt = f"""You are a history professor creating a {difficulty}-level exam question.
 
-        generation_prompt_template = """You are a history quiz master creating unique exam-style questions with strict one-line answers.
-Based *strictly and specifically* on the following historical text, generate a single, concise question.
-The question MUST be answerable in exactly one line and directly from the provided context.
-Focus on specific facts, dates, names, or events that have definitive, concise answers.
-The answer must be a single fact or phrase that fits in one line (max 15 words).
-Do NOT generate questions that require explanations, lists, or multiple sentences as answers.
-Do NOT add phrases like "in this chapter" or "from the text" at the end of the question.
-Make sure the question is different from these previous questions: {previous_questions}
-Generate a completely new question and its one-line answer based *only* on the provided context.
-
-{context_description}
+CONTEXT:
 {context}
 
-Format your output as follows:
-Question: <Your generated historical question here>
-Answer: <The direct historical answer to your question here>
+INSTRUCTIONS:
+1. Create ONE {difficulty}-level history question based on the context.
+2. {instruction}
+3. The question should be clear and focused.
+4. Provide a detailed answer (2-3 sentences) that demonstrates {difficulty}-level understanding.
+5. Format your response exactly as shown below:
+
+QUESTION: [Your question here?]
+ANSWER: [Your answer here.]
+
+Now, generate the question and answer:
 """
         
-        temp_llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0.7, api_key=os.getenv("OPENAI_API_KEY"))
+        response = llm.invoke([
+            SystemMessage(content="You are a history professor creating exam questions."),
+            HumanMessage(content=prompt)
+        ]).content
+
+        # Parse the response
+        if "QUESTION:" in response and "ANSWER:" in response:
+            question = response.split("QUESTION:", 1)[1].split("ANSWER:")[0].strip()
+            answer = response.split("ANSWER:", 1)[1].strip()
+            
+            # Validate question format
+            if not question.endswith('?'):
+                question = question.rstrip('.') + '?'
+                
+            return question, answer, difficulty
+            
+        # Fallback if parsing fails
+        raise ValueError("Could not parse the generated question and answer.")
         
-        prompt = generation_prompt_template.format(
-            context=context,
-            context_description=context_description,
-            previous_questions='\n- '.join(previous_questions) if previous_questions else 'No previous questions'
-        )
+    except Exception as e:
+        print(f"❌ Error generating question: {e}")
+        # Return a default question based on difficulty level
+        default_questions = {
+            "beginner": (f"What was a key event in {selected_chapter_title}?", 
+                        "The chapter discusses significant historical events and their importance."),
+            "intermediate": (f"What were the main causes and effects of a major event in {selected_chapter_title}?",
+                           "The chapter analyzes how various factors contributed to historical developments and their consequences."),
+            "advanced": (f"How did different perspectives shape the outcomes in {selected_chapter_title}? Analyze the evidence.",
+                        "The chapter presents multiple viewpoints and evidence that influenced historical interpretations and outcomes.")
+        }
+        return default_questions[difficulty][0], default_questions[difficulty][1], difficulty
+
+def generate_hint(question: str, expected_answer: str, zpd_score: float, llm) -> str:
+    """Generate a hint based on the ZPD score.
+    
+    Args:
+        question: The question being asked
+        expected_answer: The expected answer
+        zpd_score: The student's ZPD score (1.0-10.0)
+        llm: The language model to use
         
-        llm_response = temp_llm.invoke([
-            SystemMessage(content="You are a history quiz master creating unique questions."),
+    Returns:
+        A hint string tailored to the student's ZPD level
+    """
+    # Determine hint complexity based on ZPD score
+    if zpd_score < 4.0:  # Beginner
+        hint_style = "simple and direct, using basic vocabulary"
+    elif zpd_score < 7.0:  # Intermediate
+        hint_style = "moderately challenging, with some guidance"
+    else:  # Advanced
+        hint_style = "thought-provoking, encouraging deeper analysis"
+    
+    prompt = f"""Generate a {hint_style} hint for this question:
+    
+    Question: {question}
+    Expected Answer: {expected_answer}
+    
+    The hint should guide the student toward the answer without giving it away completely."""
+    
+    try:
+        response = llm.invoke([
+            SystemMessage(content=f"You are a helpful history tutor providing a {hint_style} hint."),
             HumanMessage(content=prompt)
         ])
-        
-        response_text = llm_response.content
-        question_match = re.search(r"Question: (.*)", response_text, re.DOTALL)
-        answer_match = re.search(r"Answer: (.*)", response_text, re.DOTALL)
-
-        generated_question = question_match.group(1).strip() if question_match else "Could not generate a question."
-        expected_answer = answer_match.group(1).strip() if answer_match else "Could not generate an answer."
-
-        if generated_question == "Could not generate a question." or expected_answer == "Could not generate an answer.":
-            print(f"LLM did not parse correctly. Raw response:\n{response_text}")
-        else:
-            print("Question Generated Successfully.")
-        return generated_question, expected_answer, display_context_name
-
+        return response.content.strip()
     except Exception as e:
-        print(f"Error generating question: {e}")
-        return None, None, None
+        print(f"Error generating hint: {e}")
+        return "Consider reviewing the key concepts related to this question."
 
-def analyze_student_answer(question: str, context: str, student_answer: str, expected_answer: str, llm) -> dict:
+def analyze_student_answer(question: str, student_answer: str, expected_answer: str, llm, zpd_score: float = 2.5):
     """
-    Analyzes the student's answer and categorizes it as correct, partially correct, or wrong.
-    Returns a dictionary with analysis results.
+    Analyzes the student's answer and evaluates its correctness.
+    
+    Args:
+        question: The question that was asked
+        student_answer: The student's answer to evaluate
+        expected_answer: The expected answer
+        llm: The language model to use
+        zpd_score: The student's ZPD score (1.0-10.0)
+        
+    Returns:
+        Dictionary with analysis results including feedback and hint if needed
     """
     try:
-        analysis_prompt = """You are a helpful history tutor evaluating a student's answer. Analyze the following:
+        # First, check if the answer is relevant
+        prompt = f"""Is this answer relevant to the question? Answer ONLY 'yes' or 'no'.
         
         Question: {question}
-        Context: {context}
+        Answer: {student_answer}"""
+        
+        response = llm.invoke([
+            SystemMessage(content="You are a history professor evaluating answer relevance."),
+            HumanMessage(content=prompt)
+        ]).content.strip().lower()
+        
+        if 'no' in response:
+            return {
+                'is_correct': False,
+                'feedback': "Your answer doesn't seem to address the question. Please focus on the specific topic being asked about.",
+                'score': 0.0,
+                'hint': generate_hint(question, expected_answer, zpd_score, llm)
+            }
+        
+        # If relevant, evaluate correctness
+        prompt = f"""Evaluate this answer as 'correct', 'partially correct', or 'incorrect'.
+        
+        Question: {question}
         Expected Answer: {expected_answer}
         Student's Answer: {student_answer}
         
-        Your task is to:
-        1. Be encouraging and focus on the learning process.
-        2. If the answer is close but not exactly right, consider it 'partially_correct'.
-        3. For 'partially_correct' answers:
-           - 'explanation' should only state "Your answer is partially correct."
-           - 'suggestion' should guide them to think differently without revealing the answer directly.
-              - Focus on the type of information they're missing (e.g., "Think about other countries involved")
-              - Ask guiding questions (e.g., "What other regions were part of this plan?")
-              - Point to general themes or categories (e.g., "Consider both western and eastern expansion")
-        4. For 'wrong' answers:
-           - 'explanation' should only state "Your answer is incorrect."
-           - 'suggestion' should provide a very general nudge (e.g., "Review the key events of this period")
-        5. Never repeat the expected answer or key terms from it in the suggestion.
-
-        Return your analysis in this exact JSON format:
-        {
-            "verdict": "correct|partially_correct|wrong",
-            "explanation": "A brief response based on the rules above.",
-            "suggestion": "A subtle hint that guides without giving away the answer."
-        }
+        Respond with ONLY one of: correct, partially correct, incorrect"""
         
-        Remember: The goal is to make them think, not to tell them the answer.
-        """
+        evaluation = llm.invoke([
+            SystemMessage(content="You are a history professor evaluating answer correctness."),
+            HumanMessage(content=prompt)
+        ]).content.strip().lower()
         
-        messages = [
-            SystemMessage(content=analysis_prompt),
-            HumanMessage(content=json.dumps({
-                "question": question, "context": context,
-                "expected_answer": expected_answer, "student_answer": student_answer
-            }))
-        ]
+        is_correct = evaluation == 'correct'
+        is_partial = 'partial' in evaluation
+        score = 1.0 if is_correct else (0.5 if is_partial else 0.0)
         
-        response = llm.invoke(messages, temperature=0.7)
+        # Generate appropriate feedback
+        if is_correct:
+            feedback = "✅ Correct! Your answer demonstrates good understanding of the topic."
+        elif is_partial:
+            feedback = "⚠️ Partially correct. You're on the right track, but there's room for improvement."
+        else:
+            feedback = "❌ Incorrect. Let's review this concept together."
         
-        try:
-            analysis = json.loads(response.content.strip()) if hasattr(response, 'content') else json.loads(response)
-            return analysis
-        except json.JSONDecodeError as je:
-            print(f"JSON decode error: {je}\nRaw response: {response.content if hasattr(response, 'content') else response}")
-            raise
+        # Generate hint if answer isn't fully correct
+        hint = None
+        if not is_correct:
+            hint = generate_hint(question, expected_answer, zpd_score, llm)
         
-    except Exception as e:
-        print(f"Error analyzing answer: {e}\nType: {type(e).__name__}\nArgs: {e.args}")
         return {
-            "verdict": "wrong", # Default to wrong if an error occurs
-            "explanation": "Your answer could not be fully analyzed.",
-            "suggestion": "Consider reviewing the topic for key details."
+            'is_correct': is_correct,
+            'score': score,
+            'feedback': feedback,
+            'hint': hint
+        }
+            
+    except Exception as e:
+        print(f"Error in analyze_student_answer: {e}")
+        return {
+            'is_correct': False,
+            'feedback': "I encountered an error evaluating your answer. Please try again.",
+            'score': 0.0,
+            'hint': "Consider rephrasing your answer or providing more details."
         }
 
-def get_feedback_on_answer(user_answer: str, expected_answer: str, question: str, llm, context: str = ""):
+def get_feedback_on_answer(user_answer: str, expected_answer: str, question: str, llm, context: str = "", zpd_score: float = 2.5):   
     """
-    Compares the user's answer to the expected answer and provides detailed feedback.
-    Returns a tuple of (feedback_message, is_correct, analysis)
-    """
-    if not user_answer.strip():
-        return "Please provide an answer.", False, None
-        
-    analysis = analyze_student_answer(question, context, user_answer, expected_answer, llm)
+    Evaluates the user's answer and provides feedback with ZPD-based hints.
     
-    if analysis["verdict"] == "correct":
-        return f"✅ Correct! {analysis['explanation']}", True, analysis
-    elif analysis["verdict"] == "partially_correct":
-        return f"⚠️ Partially Correct. {analysis['explanation']}", False, analysis
-    else:  # wrong
-        return f"❌ Incorrect. {analysis['explanation']}", False, analysis
+    Args:
+        user_answer: The student's answer
+        expected_answer: The expected correct answer
+        question: The question that was asked
+        llm: The language model to use
+        zpd_score: The student's ZPD score (1.0-10.0)
+        
+    Returns:
+        A tuple of (feedback_message, is_correct, analysis)
+    """
+    try:
+        # Check if expected answer is present
+        if not expected_answer:
+            return (
+                "I don't have an expected answer for this question. Please try again.",
+                False,
+                {'hint': "Consider asking a different question"}
+            )
+        # Check if answer is too short
+        if len(user_answer.split()) < 3:
+            return (
+                "🤔 Your answer seems quite brief. Could you elaborate more? Try to explain your thinking in more detail.",
+                False,
+                {'hint': generate_hint(question, expected_answer, zpd_score, llm)}
+            )
+        
+        # Analyze the answer
+        analysis = analyze_student_answer(question, user_answer, expected_answer, llm, zpd_score)
+        
+        # Build feedback message
+        feedback_parts = [analysis['feedback']]
+        
+        # Add hint if available and answer isn't correct
+        # if analysis.get('hint') and not analysis['is_correct']:
+        #     feedback_parts.append(f"\n💡 Hint: {analysis['hint']}")
+        
+        # Add closing note
+        if analysis['is_correct']:
+            feedback_parts.append("\n👍 Great job! You've demonstrated good understanding of the topic.")
+        else:
+            feedback_parts.append("\n💭 Take a moment to review the material and try again. You can do it!")
+        
+        return (
+            "\n".join(feedback_parts),
+            analysis['is_correct'],
+            analysis
+        )
+            
+    except Exception as e:
+        print(f"Error in get_feedback_on_answer: {e}")
+        return (
+            "I had trouble evaluating your response. Please try rephrasing your answer.",
+            False,
+            {'hint': "Consider providing more specific details in your answer."}
+        )
 
 def ask_question(qa_chain, question):
     """
@@ -411,7 +522,8 @@ def main():
             
             for attempt in range(max_retries_for_unique_question):
                 temp_question, temp_answer, temp_display_name = generate_question_from_chapter_content(
-                    retriever=retriever, llm=llm, selected_chapter_title=selected_chapter_title, previous_questions=asked_questions_history
+                    retriever=retriever, llm=llm, selected_chapter_title=selected_chapter_title, 
+                previous_questions=asked_questions_history, zpd_score=2.5  # TODO: Replace with actual ZPD score from user
                 )
                 
                 if temp_question and temp_answer and temp_question != "Could not generate a question.":
@@ -428,6 +540,7 @@ def main():
             if generated_question and expected_answer and generated_question != "Could not generate a question.":
                 print(f"\nHere's a question for you {display_context_name}:")
                 print(f"Question: {generated_question}")
+                print(f"Answer: {expected_answer}")
                 user_answer = input("Your answer (or 'exit'): ").strip()
 
                 if user_answer.lower() == 'exit':
@@ -448,7 +561,7 @@ def main():
                     
                     if not is_correct: # For both partially_correct and wrong answers
                         if input("\nWould you like a hint? (yes/no): ").lower().strip() == 'yes':
-                            print(f"\n💡 Hint: {analysis['suggestion']}")
+                            print(f"\n💡 Hint: {analysis['hint']}")
                         
                         if input("\nWould you like to see the full answer? (yes/no): ").lower().strip() == 'yes':
                             print(f"\nThe full correct answer is: {expected_answer}")
@@ -458,9 +571,87 @@ def main():
                 if input("\nDo you want another question? (yes/no): ").lower().strip() != 'yes':
                     break
             else:
-                print("Could not generate a relevant question after multiple attempts. This might happen if the selected content is too sparse for specific questions.")
-                if input("Try generating another question? (yes/no): ").lower().strip() != 'yes':
-                    break
+                try:
+                    # Create a simple prompt that's easy to parse
+                    simple_prompt = f"""Create one history question and its answer based on this context.
+                    
+                    CONTEXT:
+                    {context}
+                    
+                    Format your response as:
+                    Question: [your question here]
+                    Answer: [your answer here]"""
+                    
+                    # Get the response
+                    response = llm.invoke([
+                        SystemMessage(content="You are a helpful history tutor."),
+                        HumanMessage(content=simple_prompt)
+                    ]).content
+                    
+                    # Simple parsing
+                    question = re.search(r"Question: ?(.*?)(?=\n|$)", response, re.IGNORECASE)
+                    answer = re.search(r"Answer: ?(.*?)(?=\n|$)", response, re.IGNORECASE)
+                    
+                    # If parsing failed, try to extract question and answer from the response
+                    if not question or not answer:
+                        lines = [line.strip() for line in response.split('\n') if line.strip()]
+                        if len(lines) >= 2:
+                            question = lines[0] if '?' in lines[0] else lines[1] if len(lines) > 1 else None
+                            answer = lines[1] if '?' not in lines[0] and len(lines) > 1 else lines[2] if len(lines) > 2 else None
+                    else:
+                        question = question.group(1).strip()
+                        answer = answer.group(1).strip()
+                    
+                    # Ensure we have valid question and answer
+                    if not question or not answer:
+                        question = f"What is a key event or concept from {selected_chapter_title}?"
+                        answer = "The chapter covers important historical events and concepts from this period."
+                    
+                    # Add to previous questions to avoid repetition
+                    if asked_questions_history is not None:
+                        asked_questions_history.add(question)
+                    
+                    print(f"Question generated successfully.")
+                    generated_question, expected_answer, display_context_name = question, answer, selected_chapter_title
+                except Exception as e:
+                    print(f"Error generating question: {e}")
+                    # Return a simple default question if anything goes wrong
+                    default_q = f"What is one important aspect of {selected_chapter_title}?"
+                    default_a = "The chapter discusses significant historical events and their impacts."
+                    generated_question, expected_answer, display_context_name = default_q, default_a, selected_chapter_title
+                
+                if generated_question and expected_answer and generated_question != "Could not generate a question.":
+                    print(f"\nHere's a question for you {display_context_name}:")
+                    print(f"Question: {generated_question}")
+                    user_answer = input("Your answer (or 'exit'): ").strip()
+
+                    if user_answer.lower() == 'exit':
+                        break
+
+                    if user_answer:
+                        retrieved_docs = retriever.get_relevant_documents(generated_question)
+                        context = "\n".join([doc.page_content for doc in retrieved_docs[:2]])
+                        
+                        feedback, is_correct, analysis = get_feedback_on_answer(
+                            user_answer=user_answer, expected_answer=expected_answer,
+                            question=generated_question, llm=llm, context=context
+                        )
+                        
+                        print("\n---")
+                        print(f"Your answer: {user_answer}")
+                        print(f"\n{feedback}")
+                        
+                        if not is_correct: # For both partially_correct and wrong answers
+                            if input("\nWould you like a hint? (yes/no): ").lower().strip() == 'yes':
+                                print(f"\n💡 Hint: {analysis['hint']}")
+                            
+                            if input("\nWould you like to see the full answer? (yes/no): ").lower().strip() == 'yes':
+                                print(f"\nThe full correct answer is: {expected_answer}")
+                    else:
+                        print("You didn't provide an answer.")
+                    
+                    if input("\nDo you want another question? (yes/no): ").lower().strip() != 'yes':
+                        break
 
         except (KeyboardInterrupt, EOFError):
             print("\nExiting...")
