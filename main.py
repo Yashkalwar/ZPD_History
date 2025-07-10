@@ -7,6 +7,7 @@ import fitz  # PyMuPDF
 from ZPD_calculator import ZPDCalculator
 import random
 from dotenv import load_dotenv
+from fuzzywuzzy import fuzz
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
@@ -165,7 +166,7 @@ ANSWER:
     print("QA chain setup complete.")
     return qa_chain
 
-def generate_question_from_chapter_content(retriever, llm,zpd_score: float, selected_chapter_title: str, previous_questions: set = None):
+def generate_question_from_chapter_content(retriever, llm, zpd_score: float, selected_chapter_title: str, previous_questions: set = None):
     """
     Generates a unique question and its expected answer based on content retrieved
     from a specific chapter or the entire document, with difficulty adjusted by ZPD score.
@@ -182,81 +183,124 @@ def generate_question_from_chapter_content(retriever, llm,zpd_score: float, sele
     """
     if previous_questions is None:
         previous_questions = set()
-    
-    # Determine difficulty level based on ZPD score
-    if zpd_score < 4.0:  # Beginner level (1.0-3.9)
-        difficulty = "beginner"
-        query = f"Key events, dates, and people in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Important historical facts"
-        instruction = "Create a straightforward factual question that tests recall of basic information. Focus on who, what, when, where questions."
-    elif zpd_score < 7.5:  # Intermediate level (4.0-7.4)
-        difficulty = "intermediate"
-        query = f"Causes, effects, and relationships in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Historical cause-effect relationships"
-        instruction = "Create a question that requires understanding of how and why things happened, or comparing different events or perspectives."
-    else:  # Advanced level (7.5-10.0)
-        difficulty = "advanced"
-        query = f"Complex analysis, multiple perspectives, and long-term impacts in {selected_chapter_title}" if selected_chapter_title != "All Chapters" else "Complex historical analysis"
-        instruction = "Create a thought-provoking question that requires critical analysis, evaluation of evidence, or synthesis of multiple concepts."
-
-    print(f"\n🧠 Generating a {difficulty}-level question from {selected_chapter_title}...")
-    
-    try:
-        # Retrieve relevant context
-        retrieved_docs = retriever.get_relevant_documents(query, k=5)
-        if not retrieved_docs:
-            raise ValueError("No relevant documents found for the query.")
-            
-        context = "\n\n".join([doc.page_content for doc in retrieved_docs])
         
-        # Generate question and answer specific to the difficulty level
-        prompt = f"""You are a history professor creating a {difficulty}-level exam question.
+    # Map ZPD score to difficulty level
+    if zpd_score < 4.0:
+        difficulty = "beginner"
+        instruction = "Focus on basic facts, dates, and key terms."
+    elif zpd_score < 7.0:
+        difficulty = "intermediate"
+        instruction = "Ask about causes, effects, and basic analysis."
+    else:
+        difficulty = "advanced"
+        instruction = "Require critical thinking, comparison, and evaluation."
+    
+    # Define different question types to ensure variety
+    question_types = [
+        "a cause-and-effect question",
+        "a comparison question between two events or concepts",
+        "a question about historical significance",
+        "a question about primary sources or evidence",
+        "a question about different historical perspectives",
+        "a question about long-term consequences",
+        "a question about historical context"
+    ]
+    
+    max_attempts = 5
+    attempt = 0
+    
+    while attempt < max_attempts:
+        attempt += 1
+        print(f"\n🧠 Generating a {difficulty}-level question from {selected_chapter_title} (Attempt {attempt}/{max_attempts})...")
+        
+        try:
+            # Use a more specific query based on the chapter and a random aspect
+            query = f"{selected_chapter_title} " + random.choice([
+                "key events", "important figures", "main themes", 
+                "historical context", "primary sources", "causes and effects"
+            ])
+            
+            # Retrieve relevant context
+            retrieved_docs = retriever.get_relevant_documents(query, k=5)
+            if not retrieved_docs:
+                print("No relevant documents found, trying a different approach...")
+                continue
+                
+            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+            
+            # Select a random question type for variety
+            question_type = random.choice(question_types)
+            
+            # Generate question and answer specific to the difficulty level
+            prompt = f"""You are a history professor creating exam questions. Your task is to generate a {difficulty}-level question.
 
-CONTEXT:
-{context}
+CHAPTER: {selected_chapter_title}
+DIFFICULTY: {difficulty}
+QUESTION TYPE: {question_type}
 
 INSTRUCTIONS:
 1. Create ONE {difficulty}-level history question based on the context.
 2. {instruction}
-3. The question should be clear and focused.
-4. Provide a detailed answer (2-3 sentences) that demonstrates {difficulty}-level understanding.
-5. Format your response exactly as shown below:
+3. The question should be clear, specific, and require understanding of the material.
+4. Make sure the question is not too broad or too narrow.
+5. Provide a detailed answer (2-3 sentences) that demonstrates {difficulty}-level understanding.
+6. Format your response exactly as shown below:
 
 QUESTION: [Your question here?]
 ANSWER: [Your answer here.]
 
-Now, generate the question and answer:
-"""
-        
-        response = llm.invoke([
-            SystemMessage(content="You are a history professor creating exam questions."),
-            HumanMessage(content=prompt)
-        ]).content
+CONTEXT:
+{context}
 
-        # Parse the response
-        if "QUESTION:" in response and "ANSWER:" in response:
-            question = response.split("QUESTION:", 1)[1].split("ANSWER:")[0].strip()
-            answer = response.split("ANSWER:", 1)[1].strip()
+Now, generate the question and answer:"""
             
-            # Validate question format
-            if not question.endswith('?'):
-                question = question.rstrip('.') + '?'
+            response = llm.invoke([
+                SystemMessage(content="""You are a history professor creating unique exam questions. 
+                Ensure each question is distinct and tests different aspects of the material."""),
+                HumanMessage(content=prompt)
+            ]).content
+
+            # Parse the response
+            if "QUESTION:" in response and "ANSWER:" in response:
+                question = response.split("QUESTION:", 1)[1].split("ANSWER:")[0].strip()
+                answer = response.split("ANSWER:", 1)[1].strip()
                 
-            return question, answer, difficulty
-            
-        # Fallback if parsing fails
-        raise ValueError("Could not parse the generated question and answer.")
-        
-    except Exception as e:
-        print(f"❌ Error generating question: {e}")
-        # Return a default question based on difficulty level
-        default_questions = {
-            "beginner": (f"What was a key event in {selected_chapter_title}?", 
-                        "The chapter discusses significant historical events and their importance."),
-            "intermediate": (f"What were the main causes and effects of a major event in {selected_chapter_title}?",
-                           "The chapter analyzes how various factors contributed to historical developments and their consequences."),
-            "advanced": (f"How did different perspectives shape the outcomes in {selected_chapter_title}? Analyze the evidence.",
-                        "The chapter presents multiple viewpoints and evidence that influenced historical interpretations and outcomes.")
-        }
-        return default_questions[difficulty][0], default_questions[difficulty][1], difficulty
+                # Validate question format and check for uniqueness
+                if not question.endswith('?'):
+                    question = question.rstrip('.') + '?'
+                
+                # Check if this question is too similar to previous ones
+                is_unique = True
+                q_lower = question.lower()
+                for prev_q in previous_questions:
+                    # Check if this question is too similar to previous ones
+                    if q_lower == prev_q.lower() or \
+                       q_lower in prev_q.lower() or \
+                       prev_q.lower() in q_lower or \
+                       fuzz.ratio(q_lower, prev_q.lower()) > 80:  # Using fuzzy matching
+                        is_unique = False
+                        break
+                
+                if is_unique:
+                    previous_questions.add(question)
+                    return question, answer, difficulty
+                else:
+                    print("Generated a similar question, trying again...")
+                    
+        except Exception as e:
+            print(f"❌ Error generating question: {e}")
+    
+    # If we've tried max_attempts times, return a default question
+    print("⚠️ Could not generate a unique question after multiple attempts. Using a default question.")
+    default_questions = {
+        "beginner": (f"What was a key event in {selected_chapter_title}?", 
+                    "The chapter discusses significant historical events and their importance.", "beginner"),
+        "intermediate": (f"What were the main causes and effects of a major event in {selected_chapter_title}?",
+                       "The chapter analyzes how various factors contributed to historical developments and their consequences.", "intermediate"),
+        "advanced": (f"How did different perspectives shape the outcomes in {selected_chapter_title}? Analyze the evidence.",
+                    "The chapter presents multiple viewpoints and evidence that influenced historical interpretations and outcomes.", "advanced")
+    }
+    return default_questions[difficulty]
 
 def generate_hint(question: str, expected_answer: str, zpd_score: float, llm) -> str:
     """Generate a hint based on the ZPD score.
@@ -270,30 +314,68 @@ def generate_hint(question: str, expected_answer: str, zpd_score: float, llm) ->
     Returns:
         A hint string tailored to the student's ZPD level
     """
-    # Determine hint complexity based on ZPD score
+    # Determine hint style and detail level based on ZPD score
     if zpd_score < 4.0:  # Beginner
-        hint_style = "simple and direct, using basic vocabulary"
+        hint_style = "simple and direct"
+        detail_level = "very detailed"
+        guidance = "Break down the problem into smaller steps and provide clear, specific guidance. " \
+                 "Use simple language and concrete examples. The hint should be quite explicit " \
+                 "but still require some thinking to connect to the answer."
     elif zpd_score < 7.0:  # Intermediate
-        hint_style = "moderately challenging, with some guidance"
+        hint_style = "thought-provoking"
+        detail_level = "moderately detailed"
+        guidance = "Provide guidance that helps the student think through the problem themselves. " \
+                 "Ask leading questions or point to key concepts. The hint should require some " \
+                 "critical thinking to connect to the answer."
     else:  # Advanced
-        hint_style = "thought-provoking, encouraging deeper analysis"
+        hint_style = "subtle and thought-provoking"
+        detail_level = "minimal"
+        guidance = "Provide a subtle nudge in the right direction. The hint should be quite " \
+                 "minimal and require the student to do most of the thinking. Focus on " \
+                 "broader concepts rather than specific details."
     
-    prompt = f"""Generate a {hint_style} hint for this question:
-    
-    Question: {question}
-    Expected Answer: {expected_answer}
-    
-    The hint should guide the student toward the answer without giving it away completely."""
+    prompt = f"""You are a helpful history tutor providing a {hint_style} hint for a student.
+
+QUESTION: {question}
+EXPECTED ANSWER: {expected_answer}
+
+INSTRUCTIONS:
+1. Generate a {detail_level} hint that helps the student without giving away the answer.
+2. {guidance}
+3. The hint should be 1-2 sentences maximum.
+4. Do NOT include the answer in the hint.
+5. Focus on the key concept or approach needed.
+
+HINT:"""
     
     try:
         response = llm.invoke([
-            SystemMessage(content=f"You are a helpful history tutor providing a {hint_style} hint."),
+            SystemMessage(content=f"You are a history tutor providing a {hint_style} hint. Your hints are {detail_level}."),
             HumanMessage(content=prompt)
         ])
-        return response.content.strip()
+        
+        # Clean up the response
+        hint = response.content.strip()
+        if 'hint:' in hint.lower():
+            hint = hint.split('hint:', 1)[1].strip()
+        
+        # Ensure the hint is not too revealing for the student's level
+        if zpd_score < 4.0 and len(hint.split()) > 30:  # For beginners, keep hints concise
+            hint = ' '.join(hint.split()[:30]) + '...'
+        elif zpd_score >= 7.0 and len(hint.split()) > 15:  # For advanced, keep hints very brief
+            hint = ' '.join(hint.split()[:15]) + '...'
+            
+        return hint
+        
     except Exception as e:
         print(f"Error generating hint: {e}")
-        return "Consider reviewing the key concepts related to this question."
+        # Fallback hints based on ZPD
+        if zpd_score < 4.0:
+            return "Think about the key concepts we've discussed. What's the main idea behind this question?"
+        elif zpd_score < 7.0:
+            return "Consider how different factors might be connected in this situation."
+        else:
+            return "What patterns or themes can you identify that might be relevant here?"
 
 def analyze_student_answer(question: str, student_answer: str, expected_answer: str, llm, zpd_score: float):
     """

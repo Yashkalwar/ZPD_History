@@ -14,10 +14,17 @@ class ZPDCalculator:
         Args:
             initial_zpd: Initial ZPD score (default: 5.0)
         """
-        self.learning_rate = 0.2  # How quickly the ZPD score changes
-        self.current_zpd = initial_zpd
+        self.current_zpd = round(initial_zpd, 1)
         self.min_zpd = 1.0
         self.max_zpd = 10.0
+        
+        # Smoothing factors (0.0 to 1.0)
+        self.performance_alpha = 0.3  # How quickly to update performance estimate
+        self.zpd_beta = 0.15         # How quickly to adjust ZPD
+        
+        # Track performance trend
+        self.smoothed_performance = 0.5
+        self.performance_trend = 0.0
 
     def get_user_zpd(self) -> float:
         """Get current ZPD score (1.0 to 10.0)"""
@@ -43,27 +50,75 @@ class ZPDCalculator:
 
     def update_user_zpd(self, performance_score: float) -> float:
         """
-        Update ZPD score based on performance
+        Update ZPD score using exponential moving averages for smooth updates.
         
         Args:
             performance_score: Current performance score (0.0 to 1.0)
             
         Returns:
-            New ZPD score
+            New ZPD score (rounded to 1 decimal place)
         """
         old_zpd = self.current_zpd
         
-        # Calculate adjustment based on performance
-        # performance_score is between 0.0 and 1.0, so we subtract 0.5 to get -0.5 to 0.5 range
-        adjustment = self.learning_rate * (performance_score - 0.5)
+        # Update smoothed performance (EMA)
+        prev_smoothed = self.smoothed_performance
+        self.smoothed_performance = (
+            self.performance_alpha * performance_score + 
+            (1 - self.performance_alpha) * prev_smoothed
+        )
         
-        # Calculate new ZPD, keeping it within bounds
-        self.current_zpd = max(self.min_zpd, min(self.max_zpd, old_zpd + adjustment))
+        # Calculate performance trend (derivative of smoothed performance)
+        self.performance_trend = self.smoothed_performance - prev_smoothed
+        
+        # Calculate target ZPD adjustment based on performance
+        if performance_score >= 0.9:  # Very good answer
+            # Count consecutive successes
+            if not hasattr(self, 'consecutive_successes'):
+                self.consecutive_successes = 0
+            self.consecutive_successes += 1
+            
+            # Base adjustment + bonus for streak (capped at 3)
+            streak_bonus = min(3, self.consecutive_successes) * 0.15
+            adjustment = 0.25 + streak_bonus
+            
+        elif performance_score >= 0.6:  # Partially correct answer
+            # Reset success streak on partial answers
+            if hasattr(self, 'consecutive_successes'):
+                self.consecutive_successes = 0
+                
+            # Small positive adjustment for partial correctness
+            # Scale adjustment based on how close to 1.0 the score is
+            partial_bonus = (performance_score - 0.6) * 0.4
+            adjustment = 0.1 + partial_bonus
+            
+        else:  # Incorrect answer (performance_score < 0.6)
+            # Reset success streak on incorrect answers
+            if hasattr(self, 'consecutive_successes'):
+                self.consecutive_successes = 0
+                
+            # Scale penalty based on how wrong the answer was
+            # But cap the maximum penalty to prevent large drops
+            penalty = (0.6 - performance_score) * 0.3
+            adjustment = -min(0.15, penalty)  # Cap penalty at -0.15
+        
+        # Apply non-linear scaling to prevent large jumps
+        adjustment = np.sign(adjustment) * (abs(adjustment) ** 0.5) * 0.5
+        
+        # Update ZPD using EMA for smooth transitions
+        target_zpd = old_zpd + adjustment
+        self.current_zpd = round(
+            max(self.min_zpd, min(self.max_zpd, 
+                self.zpd_beta * target_zpd + 
+                (1 - self.zpd_beta) * old_zpd
+            )), 
+            1  # Round to 1 decimal place
+        )
         
         # Debug output
-        print(f"[ZPD CALC] Current: {old_zpd:.2f}, "
-              f"Performance: {performance_score:.2f}, "
-              f"Adjustment: {adjustment:+.2f}, "
-              f"New ZPD: {self.current_zpd:.2f}")
+        print(f"[ZPD EMA] Current: {old_zpd:.1f}, "
+              f"Performance: {performance_score:.2f} (smooth: {self.smoothed_performance:.2f}), "
+              f"Trend: {self.performance_trend:+.3f}, "
+              f"Adjustment: {adjustment:+.3f}, "
+              f"New ZPD: {self.current_zpd:.1f}")
         
         return self.current_zpd
