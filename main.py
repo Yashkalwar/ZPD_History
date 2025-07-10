@@ -4,6 +4,7 @@ import re
 import json
 from pathlib import Path
 import fitz  # PyMuPDF
+from ZPD_calculator import ZPDCalculator
 import random
 from dotenv import load_dotenv
 
@@ -164,7 +165,7 @@ ANSWER:
     print("QA chain setup complete.")
     return qa_chain
 
-def generate_question_from_chapter_content(retriever, llm, selected_chapter_title: str, previous_questions: set = None, zpd_score: float = 2.5):
+def generate_question_from_chapter_content(retriever, llm,zpd_score: float, selected_chapter_title: str, previous_questions: set = None):
     """
     Generates a unique question and its expected answer based on content retrieved
     from a specific chapter or the entire document, with difficulty adjusted by ZPD score.
@@ -294,7 +295,7 @@ def generate_hint(question: str, expected_answer: str, zpd_score: float, llm) ->
         print(f"Error generating hint: {e}")
         return "Consider reviewing the key concepts related to this question."
 
-def analyze_student_answer(question: str, student_answer: str, expected_answer: str, llm, zpd_score: float = 2.5):
+def analyze_student_answer(question: str, student_answer: str, expected_answer: str, llm, zpd_score: float):
     """
     Analyzes the student's answer and evaluates its correctness.
     
@@ -463,6 +464,25 @@ def ask_question(qa_chain, question):
 # --- Main Application Logic ---
 def main():
     """Main function to run the RAG system."""
+    # Initialize student manager and get/create student session
+    from student_manager import StudentManager, StudentSession
+    
+    student_mgr = StudentManager()
+    try:
+        # This will prompt for student ID
+        session = student_mgr.get_or_create_student()
+        
+        # If we get here, login was successful
+        print("\n=== Login Successful! ===")
+        print(f"Welcome, {session.student_name}!")
+        print(f"Your current ZPD score: {session.current_zpd:.1f}")
+        
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+    
+    
+    current_zpd = session.current_zpd
     check_environment()
     
     try:
@@ -520,10 +540,17 @@ def main():
         try:
             generated_question, expected_answer, display_context_name = None, None, None
             
+            # Debug: Show current ZPD and difficulty level
+            difficulty = "beginner" if current_zpd < 4.0 else "intermediate" if current_zpd < 7.5 else "advanced"
+            print(f"\n[DEBUG] Current ZPD: {current_zpd:.1f} (Level: {difficulty})")
+            
             for attempt in range(max_retries_for_unique_question):
                 temp_question, temp_answer, temp_display_name = generate_question_from_chapter_content(
-                    retriever=retriever, llm=llm, selected_chapter_title=selected_chapter_title, 
-                previous_questions=asked_questions_history, zpd_score=2.5  # TODO: Replace with actual ZPD score from user
+                    retriever=retriever, 
+                    llm=llm, 
+                    selected_chapter_title=selected_chapter_title,
+                    previous_questions=asked_questions_history, 
+                    zpd_score=current_zpd  # Use the current ZPD score
                 )
                 
                 if temp_question and temp_answer and temp_question != "Could not generate a question.":
@@ -550,10 +577,42 @@ def main():
                     retrieved_docs = retriever.get_relevant_documents(generated_question)
                     context = "\n".join([doc.page_content for doc in retrieved_docs[:2]])
                     
+                    # Get feedback on the answer
                     feedback, is_correct, analysis = get_feedback_on_answer(
-                        user_answer=user_answer, expected_answer=expected_answer,
-                        question=generated_question, llm=llm, context=context
+                        user_answer=user_answer, 
+                        expected_answer=expected_answer,
+                        question=generated_question, 
+                        llm=llm, 
+                        context=context,
+                        zpd_score=current_zpd  # Pass current ZPD for hint generation
                     )
+                    
+                    # Update ZPD based on performance using ZPDCalculator
+                    old_zpd = current_zpd
+                    
+                    # Record performance (1.0 = correct, 0.5 = partial, 0.0 = incorrect)
+                    performance_score = 1.0 if is_correct else (0.5 if analysis.get('partially_correct', False) else 0.0)
+                    
+                    # Update ZPD using the student manager
+                    old_zpd, current_zpd = student_mgr.update_student_zpd(
+                        student_session=session,
+                        is_correct=is_correct,
+                        is_partial=analysis.get('partially_correct', False)
+                    )
+                    
+                    # Get direction of change for debug message
+                    change = current_zpd - old_zpd
+                    change_str = f"+{change:.2f}" if change >= 0 else f"{change:.2f}"
+                    
+                    print(f"\n[DEBUG] ZPD: {old_zpd:.1f} -> {current_zpd:.1f} ({change_str})")
+                    if is_correct:
+                        print("Great job! Your ZPD score has increased.")
+                    elif analysis.get('partially_correct', False):
+                        print("Good effort! Your ZPD score has increased slightly.")
+                    else:
+                        print("Keep trying! Your ZPD score has been adjusted based on your performance.")
+                    
+                    print(f"Your new ZPD score: {current_zpd:.1f}")
                     
                     print("\n---")
                     print(f"Your answer: {user_answer}")
@@ -659,3 +718,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Initialize the student manager
