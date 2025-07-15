@@ -206,6 +206,17 @@ def generate_question_from_chapter_content(retriever, llm, zpd_score: float, sel
         "a question about historical context"
     ]
     
+    # Define different content aspects to focus on
+    content_aspects = [
+        "key events",
+        "important figures",
+        "main themes",
+        "historical context",
+        "primary sources",
+        "causes and effects",
+        "different perspectives"
+    ]
+    
     max_attempts = 5
     attempt = 0
     
@@ -214,19 +225,22 @@ def generate_question_from_chapter_content(retriever, llm, zpd_score: float, sel
         print(f"\n🧠 Generating a {difficulty}-level question from {selected_chapter_title} (Attempt {attempt}/{max_attempts})...")
         
         try:
-            # Use a more specific query based on the chapter and a random aspect
-            query = f"{selected_chapter_title} " + random.choice([
-                "key events", "important figures", "main themes", 
-                "historical context", "primary sources", "causes and effects"
-            ])
+            # Select a random aspect to focus on
+            focus_aspect = random.choice(content_aspects)
             
-            # Retrieve relevant context
-            retrieved_docs = retriever.get_relevant_documents(query, k=5)
+            # Retrieve relevant context with a specific focus
+            retrieved_docs = retriever.get_relevant_documents(f"{selected_chapter_title} {focus_aspect}", k=5)
             if not retrieved_docs:
                 print("No relevant documents found, trying a different approach...")
                 continue
                 
-            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+            # Filter documents to only include those from the selected chapter
+            filtered_docs = [doc for doc in retrieved_docs if doc.metadata.get('chapter_title') == selected_chapter_title]
+            if not filtered_docs:
+                print(f"No documents found for chapter: {selected_chapter_title}")
+                continue
+                
+            context = "\n\n".join([doc.page_content for doc in filtered_docs])
             
             # Select a random question type for variety
             question_type = random.choice(question_types)
@@ -235,6 +249,7 @@ def generate_question_from_chapter_content(retriever, llm, zpd_score: float, sel
             prompt = f"""You are a history professor creating exam questions. Your task is to generate a {difficulty}-level question.
 
 CHAPTER: {selected_chapter_title}
+FOCUS ASPECT: {focus_aspect}
 DIFFICULTY: {difficulty}
 QUESTION TYPE: {question_type}
 
@@ -273,7 +288,6 @@ Now, generate the question and answer:"""
                 is_unique = True
                 q_lower = question.lower()
                 for prev_q in previous_questions:
-                    # Check if this question is too similar to previous ones
                     if q_lower == prev_q.lower() or \
                        q_lower in prev_q.lower() or \
                        prev_q.lower() in q_lower or \
@@ -281,9 +295,21 @@ Now, generate the question and answer:"""
                         is_unique = False
                         break
                 
+                # Check if the question focuses on the same aspect as previous questions
                 if is_unique:
-                    previous_questions.add(question)
-                    return question, answer, difficulty
+                    # Check if we've asked similar aspect questions recently
+                    recent_aspects = set()
+                    for prev_q in previous_questions:
+                        if len(recent_aspects) >= 3:  # Allow max 3 questions of same aspect in a row
+                            break
+                        if fuzz.ratio(q_lower, prev_q.lower()) > 60:  # Similar question
+                            recent_aspects.add(focus_aspect)
+                    
+                    if len(recent_aspects) < 3:  # Only allow if not too many similar aspects
+                        previous_questions.add(question)
+                        return question, answer, difficulty
+                    else:
+                        print(f"Too many similar aspect questions ({focus_aspect}), trying different aspect...")
                 else:
                     print("Generated a similar question, trying again...")
                     
