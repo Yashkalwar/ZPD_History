@@ -21,6 +21,8 @@ if "chapter_id" not in st.session_state:
     st.session_state.chapter_id = None
 if "chapter_title" not in st.session_state:
     st.session_state.chapter_title = None
+if "token" not in st.session_state:
+    st.session_state.token = None
 if "page" not in st.session_state:
     st.session_state.page = "login"
 
@@ -33,14 +35,21 @@ def login_page():
             st.error("Please enter your Student ID.")
             return
         try:
-            resp = requests.post(f"{API_URL}/api/students/login", json={"student_id": student_id})
+            resp = requests.post(f"{API_URL}/auth/login", json={"student_id": student_id})
             data = resp.json()
-            
+
             if resp.status_code == 200 and data.get("success"):
-                # Update session with backend response data
                 st.session_state.student_id = student_id
                 st.session_state.student_name = data.get("student_name", f"Student {student_id}")
-                st.session_state.zpd_score = float(data.get("zpd_score", 2.5))
+                st.session_state.token = data.get("token")
+
+                # Fetch initial ZPD score
+                zpd_resp = requests.get(f"{API_URL}/progress/zpd", params={"token": st.session_state.token})
+                if zpd_resp.status_code == 200:
+                    st.session_state.zpd_score = float(zpd_resp.json().get("zpd_score", 2.5))
+                else:
+                    st.session_state.zpd_score = 2.5
+
                 st.session_state.page = "chapter_select"
                 st.rerun()
             else:
@@ -204,7 +213,7 @@ def quiz_page():
                 "zpd_score": float(st.session_state.zpd_score or 2.5),
                 "previous_questions": st.session_state.previous_questions or []
             }
-            resp = requests.post(f"{API_URL}/api/quiz/question", json=payload)
+            resp = requests.post(f"{API_URL}/quiz/question", json=payload)
             
             if resp.status_code == 200:
                 data = resp.json()
@@ -314,13 +323,19 @@ def quiz_page():
 def progress_page():
     st.title("📈 Your Progress & History")
     try:
-        # Show current ZPD score from session state
+        # Refresh ZPD score from backend
+        if st.session_state.token:
+            zpd_resp = requests.get(f"{API_URL}/progress/zpd", params={"token": st.session_state.token})
+            if zpd_resp.status_code == 200:
+                st.session_state.zpd_score = zpd_resp.json().get("zpd_score", st.session_state.zpd_score)
+
+            hist_resp = requests.get(f"{API_URL}/progress/history", params={"token": st.session_state.token})
+            history = hist_resp.json().get("history", []) if hist_resp.status_code == 200 else []
+        else:
+            history = []
+
         if st.session_state.zpd_score is not None:
             st.markdown(f"**Current ZPD Score:** {st.session_state.zpd_score:.2f}")
-        
-        # Initialize empty history (since we don't have a backend for this yet)
-        history = []
-        st.info("Quiz history tracking will be available soon.")
         if history:
             st.markdown("### Answer History:")
             for item in history[::-1]:
@@ -332,7 +347,7 @@ def progress_page():
             st.rerun()
         if st.button("Logout"):
             try:
-                resp = requests.post(f"{API_URL}/api/students/logout", json={"token": st.session_state.token})
+                resp = requests.post(f"{API_URL}/auth/logout", json={"token": st.session_state.token})
                 if resp.status_code == 200:
                     st.session_state.page = "login"
                     st.session_state.token = None

@@ -47,12 +47,15 @@ def get_question(request: QuestionRequest, fastapi_request: Request):
 
 # --- Evaluate Endpoint ---
 from fastapi import Body
+from backend.routers.progress import add_to_history, HistoryItem
+from backend.routers.auth import sessions
 
 class EvaluateRequest(BaseModel):
     question: str
     user_answer: str
     expected_answer: str
     zpd_score: float
+    token: str | None = None
 
 class EvaluateResponse(BaseModel):
     is_correct: bool
@@ -69,13 +72,31 @@ def evaluate_answer(request: EvaluateRequest, fastapi_request: Request):
         if not request.question or not request.user_answer or not request.expected_answer:
             raise HTTPException(status_code=400, detail="Missing required fields.")
         analysis = core_logic.analyze_student_answer(
-            request.question, request.user_answer, request.expected_answer, llm, request.zpd_score
+            request.question,
+            request.user_answer,
+            request.expected_answer,
+            llm,
+            request.zpd_score,
         )
+
+        # Record the attempt if a token was provided
+        if request.token:
+            add_to_history(
+                request.token,
+                HistoryItem(
+                    question=request.question,
+                    user_answer=request.user_answer,
+                    correct=analysis["is_correct"],
+                    score=analysis["score"],
+                    feedback=analysis["feedback"],
+                ),
+            )
+
         return EvaluateResponse(
-            is_correct=analysis['is_correct'],
-            score=analysis['score'],
-            feedback=analysis['feedback'],
-            hint=analysis.get('hint', "")
+            is_correct=analysis["is_correct"],
+            score=analysis["score"],
+            feedback=analysis["feedback"],
+            hint=analysis.get("hint", ""),
         )
     except HTTPException:
         raise
