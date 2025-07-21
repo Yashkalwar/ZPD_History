@@ -35,25 +35,16 @@ def login_page():
             st.error("Please enter your Student ID.")
             return
         try:
-            resp = requests.post(f"{API_URL}/auth/login", json={"student_id": student_id})
+            resp = requests.post(f"{API_URL}/api/students/login", json={"student_id": student_id})
             data = resp.json()
-
+            print(f"Response data: {data}")
             if resp.status_code == 200 and data.get("success"):
                 st.session_state.student_id = student_id
-                st.session_state.student_name = data.get("student_name", f"Student {student_id}")
-                st.session_state.token = data.get("token")
-
-                # Fetch initial ZPD score
-                zpd_resp = requests.get(f"{API_URL}/progress/zpd", params={"token": st.session_state.token})
-                if zpd_resp.status_code == 200:
-                    st.session_state.zpd_score = float(zpd_resp.json().get("zpd_score", 2.5))
-                else:
-                    st.session_state.zpd_score = 2.5
-
+                st.session_state.student_name = data["student_name"]
+                st.session_state.zpd_score = data["zpd_score"]
                 st.session_state.page = "chapter_select"
                 st.rerun()
             else:
-                # Show error details from backend
                 error_msg = data.get("detail") or data.get("message", "Login failed. Please try again.")
                 st.error(f"Login failed: {error_msg}")
                 
@@ -69,7 +60,7 @@ def load_chapter_data():
     """Load chapter data from the backend API or fallback to local file."""
     try:
         # Try to load from backend API first
-        resp = requests.get(f"{API_URL}/chapters")
+        resp = requests.get(f"{API_URL}/api/chapters")
         if resp.status_code == 200:
             return resp.json()
             
@@ -90,6 +81,7 @@ def chapter_select_page():
     
     # Load chapter data
     chapters = load_chapter_data()
+    print(f"Chapter data: {chapters}")
     
     if not chapters or not isinstance(chapters, list):
         st.error("No valid chapter data available. Please try again later.")
@@ -213,7 +205,7 @@ def quiz_page():
                 "zpd_score": float(st.session_state.zpd_score or 2.5),
                 "previous_questions": st.session_state.previous_questions or []
             }
-            resp = requests.post(f"{API_URL}/quiz/question", json=payload)
+            resp = requests.post(f"{API_URL}/api/quiz/question", json=payload)
             
             if resp.status_code == 200:
                 data = resp.json()
@@ -262,7 +254,7 @@ def quiz_page():
                         "zpd_score": st.session_state.zpd_score or 2.5,
                         "token": st.session_state.token
                     }
-                    eval_resp = requests.post(f"{API_URL}/quiz/evaluate", json=eval_payload)
+                    eval_resp = requests.post(f"{API_URL}/api/quiz/evaluate", json=eval_payload)
                     if eval_resp.status_code == 200:
                         eval_data = eval_resp.json()
                         st.session_state.feedback = eval_data["feedback"]
@@ -285,7 +277,7 @@ def quiz_page():
                     "zpd_score": st.session_state.zpd_score or 2.5,
                     "token": st.session_state.token
                 }
-                hint_resp = requests.post(f"{API_URL}/quiz/hint", json=hint_payload)
+                hint_resp = requests.post(f"{API_URL}/api/quiz/hint", json=hint_payload)
                 if hint_resp.status_code == 200:
                     st.session_state.current_hint = hint_resp.json()["hint"]
                 else:
@@ -325,11 +317,11 @@ def progress_page():
     try:
         # Refresh ZPD score from backend
         if st.session_state.token:
-            zpd_resp = requests.get(f"{API_URL}/progress/zpd", params={"token": st.session_state.token})
+            zpd_resp = requests.get(f"{API_URL}/api/progress/zpd", params={"token": st.session_state.token})
             if zpd_resp.status_code == 200:
                 st.session_state.zpd_score = zpd_resp.json().get("zpd_score", st.session_state.zpd_score)
 
-            hist_resp = requests.get(f"{API_URL}/progress/history", params={"token": st.session_state.token})
+            hist_resp = requests.get(f"{API_URL}/api/progress/history", params={"token": st.session_state.token})
             history = hist_resp.json().get("history", []) if hist_resp.status_code == 200 else []
         else:
             history = []
@@ -347,7 +339,7 @@ def progress_page():
             st.rerun()
         if st.button("Logout"):
             try:
-                resp = requests.post(f"{API_URL}/auth/logout", json={"token": st.session_state.token})
+                resp = requests.post(f"{API_URL}/api/students/logout", json={"token": st.session_state.token})
                 if resp.status_code == 200:
                     st.session_state.page = "login"
                     st.session_state.token = None

@@ -32,12 +32,12 @@ def login(request: LoginRequest):
     sessions[token] = {"student_id": request.student_id, "zpd_score": 2.5}
     return LoginResponse(success=True, token=token, message="Login successful.")
 
-@router.post("/logout")
-def logout(token: str):
-    if token in sessions:
-        del sessions[token]
-        return {"success": True, "message": "Logged out."}
-    return {"success": False, "message": "Invalid session."}
+# @router.post("/logout")
+# def logout(token: str):
+#     if token in sessions:
+#         del sessions[token]
+#         return {"success": True, "message": "Logged out."}
+#     return {"success": False, "message": "Invalid session."}
 
 @router.get("/session", response_model=SessionResponse)
 def get_session(token: str):
