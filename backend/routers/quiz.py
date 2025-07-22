@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from typing import Optional, List
@@ -17,34 +19,38 @@ class QuestionResponse(BaseModel):
 
 @router.post("/question", response_model=QuestionResponse)
 def get_question(request: QuestionRequest, fastapi_request: Request):
-    # Validate chapter
-    chapter_map = fastapi_request.app.state.chapter_map
-    chapter = next((c for c in chapter_map if c["id"] == request.chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chapter not found.")
-    chapter_title = chapter["title"]
-
-    # Get shared LLM and retriever
-    llm = fastapi_request.app.state.llm
-    retriever = fastapi_request.app.state.retriever
-    previous_questions = set(request.previous_questions or [])
-
-    # Import core logic
-    import main as core_logic
     try:
-        question, answer, difficulty = core_logic.generate_question_from_chapter_content(
-            retriever, llm, request.zpd_score, chapter_title, previous_questions
-        )
-        focus_aspect = "unknown"
-        return QuestionResponse(
-            question=question,
-            answer=answer,  # Hide this in frontend if needed
-            difficulty=difficulty,
-            focus_aspect=focus_aspect
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating question: {str(e)}")
+        # Validate chapter
+        chapter_map = fastapi_request.app.state.chapter_map
+        chapter = next((c for c in chapter_map if c["id"] == request.chapter_id), None)
+        if not chapter:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chapter not found.")
+        chapter_title = chapter["title"]
 
+        # Get shared LLM and retriever
+        llm = fastapi_request.app.state.llm
+        retriever = fastapi_request.app.state.retriever
+        previous_questions = set(request.previous_questions or [])
+
+        # Import core logic
+        import main as core_logic
+        try:
+            question, answer, difficulty = core_logic.generate_question_from_chapter_content(
+                retriever, llm, request.zpd_score, chapter_title, previous_questions
+            )
+            print("***********")
+            focus_aspect = "unknown"
+            return QuestionResponse(
+                question=question,
+                answer=answer,  # Hide this in frontend if needed
+                difficulty=difficulty,
+                focus_aspect=focus_aspect
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating question: {str(e)}")
+    except:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error generating question: {str(e)}")
 # --- Evaluate Endpoint ---
 from fastapi import Body
 from backend.routers.progress import add_to_history, HistoryItem
@@ -55,7 +61,7 @@ class EvaluateRequest(BaseModel):
     user_answer: str
     expected_answer: str
     zpd_score: float
-    token: str | None = None
+    token: str
 
 class EvaluateResponse(BaseModel):
     is_correct: bool
@@ -125,3 +131,4 @@ def get_hint(request: HintRequest, fastapi_request: Request):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating hint: {str(e)}")
+ 

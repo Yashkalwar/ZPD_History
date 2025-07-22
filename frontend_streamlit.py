@@ -37,7 +37,7 @@ def login_page():
         try:
             resp = requests.post(f"{API_URL}/api/students/login", json={"student_id": student_id})
             data = resp.json()
-            print(f"Response data: {data}")
+            #print(f"Response data: {data}")
             if resp.status_code == 200 and data.get("success"):
                 st.session_state.student_id = student_id
                 st.session_state.student_name = data["student_name"]
@@ -81,7 +81,7 @@ def chapter_select_page():
     
     # Load chapter data
     chapters = load_chapter_data()
-    print(f"Chapter data: {chapters}")
+    # print(f"Chapter data: {chapters}")
     
     if not chapters or not isinstance(chapters, list):
         st.error("No valid chapter data available. Please try again later.")
@@ -206,7 +206,8 @@ def quiz_page():
                 "previous_questions": st.session_state.previous_questions or []
             }
             resp = requests.post(f"{API_URL}/api/quiz/question", json=payload)
-            
+            print(resp.json())
+            print("2222222222222222222222222222222222222222222222222222222")
             if resp.status_code == 200:
                 data = resp.json()
                 st.session_state.current_question = data["question"]
