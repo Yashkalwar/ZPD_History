@@ -544,30 +544,30 @@ def get_feedback_on_answer(user_answer: str, expected_answer: str, question: str
             {'hint': "Consider providing more specific details in your answer."}
         )
 
-def ask_question(qa_chain, question):
-    """
-    This function is largely deprecated for the interactive quiz mode,
-    as the main loop directly handles question generation and feedback.
-    It remains as a utility for potential direct QA queries.
-    """
-    print("\n🔍 Processing your question with RAG chain (utility function, not used in main quiz loop)...")
-    try:
-        result = qa_chain.invoke({"query": question})
-        print(f"\n{'='*80}\n📝 RAG System's Answer (for reference/debugging):\n{result['result']}\n{'='*80}\n")
-        if result.get("source_documents"):
-            print("📚 Sources (for reference/debugging):")
-            for doc in result["source_documents"]:
-                page_num, chapter_id, chapter_title, relevance_score = (
-                    doc.metadata.get('page', 'N/A'), doc.metadata.get('chapter_id', 'N/A'),
-                    doc.metadata.get('chapter_title', 'N/A'), doc.metadata.get('relevance_score', 'N/A')
-                )
-                score_str = f"{relevance_score:.4f}" if isinstance(relevance_score, float) else relevance_score
-                print(f"  - Source: {doc.metadata.get('source', 'N/A')}, Page: {page_num}, "
-                      f"Chapter: {chapter_title} ({chapter_id}), Relevance Score: {score_str}")
-        else:
-            print("ℹ️ No sources were returned for this answer.")
-    except Exception as e:
-        print(f"An error occurred while asking the question: {e}")
+# def ask_question(qa_chain, question):
+#     """
+#     This function is largely deprecated for the interactive quiz mode,
+#     as the main loop directly handles question generation and feedback.
+#     It remains as a utility for potential direct QA queries.
+#     """
+#     print("\n🔍 Processing your question with RAG chain (utility function, not used in main quiz loop)...")
+#     try:
+#         result = qa_chain.invoke({"query": question})
+#         print(f"\n{'='*80}\n📝 RAG System's Answer (for reference/debugging):\n{result['result']}\n{'='*80}\n")
+#         if result.get("source_documents"):
+#             print("📚 Sources (for reference/debugging):")
+#             for doc in result["source_documents"]:
+#                 page_num, chapter_id, chapter_title, relevance_score = (
+#                     doc.metadata.get('page', 'N/A'), doc.metadata.get('chapter_id', 'N/A'),
+#                     doc.metadata.get('chapter_title', 'N/A'), doc.metadata.get('relevance_score', 'N/A')
+#                 )
+#                 score_str = f"{relevance_score:.4f}" if isinstance(relevance_score, float) else relevance_score
+#                 print(f"  - Source: {doc.metadata.get('source', 'N/A')}, Page: {page_num}, "
+#                       f"Chapter: {chapter_title} ({chapter_id}), Relevance Score: {score_str}")
+#         else:
+#             print("ℹ️ No sources were returned for this answer.")
+#     except Exception as e:
+#         print(f"An error occurred while asking the question: {e}")
 
 # --- Main Application Logic ---
 def main():
