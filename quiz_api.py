@@ -16,7 +16,7 @@ from main import (
     PDF_PATH,
     CHAPTER_MAP_PATH,
 )
-from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 
 app = FastAPI(title="Quiz API")
@@ -24,10 +24,10 @@ app = FastAPI(title="Quiz API")
 student_mgr = StudentManager()
 
 # Global resources
-embeddings = HuggingFaceBgeEmbeddings(
+embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-base-en-v1.5",
     model_kwargs={"device": "cpu"},
-    encode_kwargs={"normalize_embeddings": True},
+    encode_kwargs={"normalize_embeddings": True}
 )
 llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0.7, max_tokens=1500)
 retrievers: Dict[str, any] = {}
