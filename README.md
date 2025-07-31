@@ -1,88 +1,83 @@
-# A-Level Study Assistant
+# 📚 A-Level History Study Buddy
 
-An AI-powered study assistant that helps students prepare for A-Level exams by providing personalized explanations, practice questions, and feedback.
+Welcome to your personal AI-powered study assistant for A-Level History! This tool helps you study smarter by adapting to your learning pace and style. Whether you're cramming for exams or just want to understand historical events better, I'm here to help.
 
-## Features
-- AI-powered chat interface for asking questions about A-Level topics
-- Context-aware responses using vector embeddings
-- Practice question generation and evaluation
-- User authentication and history tracking
-- Interactive Streamlit frontend
+## ✨ What Makes This Special?
 
-## Setup
+- **Adaptive Learning**: The system adjusts question difficulty based on your performance, just like a real tutor would
+- **Interactive Quizzes**: Test your knowledge with automatically generated questions
+- **Instant Feedback**: Get detailed explanations and feedback on your answers
+- **Chapter-Specific Practice**: Focus on specific historical periods or topics
+- **Progress Tracking**: Watch your knowledge grow over time
 
-1. Clone the repository
-2. Create a virtual environment:
+## 🚀 Quick Start Guide
+
+### Prerequisites
+Before we begin, make sure you have:
+- Python 3.8 or higher
+- An OpenAI API key (get one at [OpenAI's website](https://platform.openai.com/))
+- Basic knowledge of command line/terminal
+
+### Step 1: Get the Code
+First, clone this repository to your computer:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+git clone https://github.com/your-username/alevel-history-assistant.git
+cd alevel-history-assistant
 ```
 
-3. Install dependencies:
+### Step 2: Set Up Your Environment
+
+1. **Create a virtual environment** (keeps your project dependencies organized):
+   ```bash
+   # On Windows:
+   python -m venv venv
+   .\venv\Scripts\activate
+   
+   # On macOS/Linux:
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+2. **Install the required packages**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Set up your API key**:
+   - Create a new file called `.env` in the project folder
+   - Add your OpenAI API key like this:
+     ```
+     OPENAI_API_KEY=your-api-key-here
+     ```
+
+### Step 3: Start Learning!
+
+#### Option 1: Command Line Interface (For Quick Use)
 ```bash
-pip install -r requirements.txt
+python main.py
 ```
 
-4. Copy `env.example` to `.env` and fill in your OpenAI API key:
-```bash
-cp env.example .env
-```
+#### Option 2: Web Interface (More Interactive)
 
-5. Initialize the database:
-```bash
-python scripts/init_db.py
-```
+1. **Initialize the Database** (run once):
+   ```bash
+   # In the project directory
+   python create_sample_data.py
+   ```
+   This will set up the initial database with sample data
 
-6. Build the FAISS index:
-```bash
-python scripts/build_faiss.py
-```
+2. **Start the Backend API** (in a terminal):
+   ```bash
+   # In the project directory
+   uvicorn quiz_api:app --reload
+   ```
+   This will start the FastAPI backend with auto-reload enabled
 
-7. Run the application:
-```bash
-# Backend
-uvicorn backend.app.main:app --reload
+2. **Start the Frontend** (in a new terminal):
+   ```bash
+   # In the project directory
+   streamlit run streamlit_frontend.py
+   ```
+   This will automatically open your browser to `http://localhost:8501`
 
-# Frontend
-streamlit run frontend/app.py
-```
-
-## Project Structure
-```
-CODE_FINAL/
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── env.example
-├── data/
-│   ├── raw/
-│   └── faiss_index/
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── models.py
-│   │   ├── db.py
-│   │   ├── vector_store.py
-│   │   ├── endpoints/
-│   │   │   ├── auth.py
-│   │   │   ├── chat.py
-│   │   │   └── evaluate.py
-│   │   └── prompts.py
-│   └── alembic/
-├── frontend/
-│   └── app.py
-├── scripts/
-│   ├── build_faiss.py
-│   └── init_db.py
-└── tests/
-    ├── test_auth.py
-    └── test_chat_flow.py
-```
-
-## Requirements
-- Python 3.9+
-- OpenAI API key
-- PostgreSQL (optional, SQLite can be used for development)
-- FAISS for vector storage
+> **Note**: Make sure both the backend and frontend are running for full functionality. The frontend depends on the backend API to work properly.

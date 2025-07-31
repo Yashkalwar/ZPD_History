@@ -1,34 +1,67 @@
+"""
+ZPD-Based Adaptive Learning System
+
+This module implements an adaptive learning system that uses the Zone of Proximal Development (ZPD)
+to personalize the learning experience. It features:
+- Document processing and question generation
+- Adaptive difficulty based on student performance
+- Interactive Q&A with feedback
+- Vector-based semantic search using FAISS
+
+External Resources and Credits:
+- PyMuPDF (fitz): For PDF text extraction (https://pypi.org/project/PyMuPDF/)
+- LangChain: For document processing and LLM integration (https://python.langchain.com/)
+- FAISS: For efficient vector similarity search (https://github.com/facebookresearch/faiss)
+- HuggingFace: For embeddings and cross-encoders (https://huggingface.co/)
+- OpenAI: For GPT language model integration (https://openai.com/)
+- FuzzyWuzzy: For string matching and similarity (https://github.com/seatgeek/fuzzywuzzy)
+- BGE Embeddings: For document embeddings (https://huggingface.co/BAAI/bge-base-en-v1.5)
+- BGE Reranker: For document re-ranking (https://huggingface.co/BAAI/bge-reranker-base)
+
+Note: This implementation is based on educational research in adaptive learning systems
+and makes use of several open-source libraries. All external code is used in accordance
+with their respective licenses.
+"""
+
+# Standard library imports
 import os
 import sys
 import re
 import json
-from pathlib import Path
-import fitz  # PyMuPDF
-from ZPD_calculator import ZPDCalculator
 import random
-from dotenv import load_dotenv
-from fuzzywuzzy import fuzz
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Set, Any, Union
 
+# Third-party imports
+import fitz  # PyMuPDF - For PDF processing: https://pypi.org/project/PyMuPDF/
+from dotenv import load_dotenv  # For loading environment variables
+from fuzzywuzzy import fuzz  # For string matching: https://github.com/seatgeek/fuzzywuzzy
+
+# LangChain imports
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_community.vectorstores import FAISS  # FAISS for vector search: https://github.com/facebookresearch/faiss
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings  # BERT-based embeddings
 from langchain.chains import RetrievalQA
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI  # OpenAI's chat models
 from langchain.prompts import PromptTemplate
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_core.messages import HumanMessage, SystemMessage
 
+# Local imports
+from ZPD_calculator import ZPDCalculator  # Custom module for ZPD calculations
+
 # Load environment variables
 load_dotenv()
 
-# --- Constants ---
+# --- Application Constants ---
+# These paths are relative to the project root directory
 BASE_DIR = Path(__file__).resolve().parent
-PDF_PATH = BASE_DIR / "data" / "raw" / "history.pdf"
-VECTORSTORE_PATH = BASE_DIR / "data" / "faiss_index_optimized"
-CHAPTER_MAP_PATH = BASE_DIR / "data" / "raw" / "chapter_map.json"
+PDF_PATH = BASE_DIR / "data" / "raw" / "history.pdf"  # Path to the source PDF
+VECTORSTORE_PATH = BASE_DIR / "data" / "faiss_index_optimized"  # Where FAISS index will be stored
+CHAPTER_MAP_PATH = BASE_DIR / "data" / "raw" / "chapter_map.json"  # Chapter metadata
 
 # --- Utility Functions ---
 def check_environment():
@@ -104,44 +137,112 @@ def split_documents(docs: list[Document], chunk_size: int = 1000, chunk_overlap:
     return chunks
 
 def create_and_save_vectorstore(chunks: list[Document]):
-    """Creates and saves a FAISS vector store from document chunks."""
+    """
+    Creates and saves a FAISS (Facebook AI Similarity Search) vector store from document chunks.
+    
+    This function uses BGE (BAAI General Embedding) model to create dense vector representations
+    of the text chunks and stores them in a FAISS index for efficient similarity search.
+    
+    References:
+    - FAISS: https://github.com/facebookresearch/faiss
+    - BGE Embeddings: https://huggingface.co/BAAI/bge-base-en-v1.5
+    """
     try:
         print("Initializing BGE embeddings for vector store creation...")
+        # Using BGE (BAAI General Embedding) model for creating document embeddings
+        # Model card: https://huggingface.co/BAAI/bge-base-en-v1.5
         embeddings = HuggingFaceBgeEmbeddings(
-            model_name="BAAI/bge-base-en-v1.5", model_kwargs={'device': 'cpu'}, encode_kwargs={'normalize_embeddings': True}
+            model_name="BAAI/bge-base-en-v1.5",
+            model_kwargs={'device': 'cpu'},  # Using CPU for compatibility
+            encode_kwargs={'normalize_embeddings': True}  # Normalize embeddings for cosine similarity
         )
+        
+        # Create FAISS index from document chunks
+        # FAISS provides efficient similarity search and clustering of dense vectors
         print(f"Creating FAISS index from {len(chunks)} chunks...")
         vectorstore = FAISS.from_documents(chunks, embeddings)
+        
+        # Save the vector store for later use
         VECTORSTORE_PATH.mkdir(parents=True, exist_ok=True)
         vectorstore.save_local(str(VECTORSTORE_PATH))
-        print(f"Vector store created and saved successfully at: {VECTORSTORE_PATH}")
+        print(f"✅ Vector store created and saved successfully at: {VECTORSTORE_PATH}")
+        
     except Exception as e:
-        print(f"Error creating vector store: {e}")
+        print(f"❌ Error creating vector store: {e}")
         sys.exit(1)
 
 def load_retriever_and_reranker(embeddings_model, query_instruction: str, selected_chapter_id: str = None):
-    """Loads the vector store and sets up a sophisticated retriever with a re-ranking stage."""
+    """
+    Loads the vector store and sets up a sophisticated retriever with a re-ranking stage.
+    
+    This function combines FAISS for efficient vector similarity search with a cross-encoder
+    re-ranker to improve retrieval quality. The re-ranker uses BGE-Reranker to reorder the
+    initial results based on more sophisticated semantic understanding.
+    
+    References:
+    - FAISS: https://github.com/facebookresearch/faiss
+    - BGE-Reranker: https://huggingface.co/BAAI/bge-reranker-base
+    - LangChain Retriever: https://python.langchain.com/docs/modules/data_connection/retrievers/
+    
+    Args:
+        embeddings_model: The embeddings model used for the vector store
+        query_instruction: Instruction for query processing
+        selected_chapter_id: Optional chapter ID to filter results
+        
+    Returns:
+        ContextualCompressionRetriever: Configured retriever with re-ranking
+    """
     try:
-        print("Loading vector store...")
+        print("Loading FAISS vector store...")
         if not VECTORSTORE_PATH.exists():
-             print(f"Vector store not found at {VECTORSTORE_PATH}. Please run the ingestion process first.")
-             sys.exit(1)
-        vectorstore = FAISS.load_local(str(VECTORSTORE_PATH), embeddings_model, allow_dangerous_deserialization=True)
+            print(f"❌ Vector store not found at {VECTORSTORE_PATH}. Please run the ingestion process first.")
+            sys.exit(1)
+            
+        # Load the FAISS index with the embeddings model
+        vectorstore = FAISS.load_local(
+            str(VECTORSTORE_PATH),
+            embeddings_model,
+            allow_dangerous_deserialization=True  # Required for FAISS deserialization
+        )
 
-        search_kwargs = {"k": 10}
+        # Configure search parameters
+        search_kwargs = {"k": 10}  # Retrieve top 10 documents initially
+        
+        # Apply chapter filter if specified
         if selected_chapter_id and selected_chapter_id != "all":
-            print(f"Filtering retrieval for chapter: {selected_chapter_id}")
+            print(f"🔍 Filtering retrieval for chapter: {selected_chapter_id}")
             search_kwargs["filter"] = {"chapter_id": selected_chapter_id}
         else:
-            print("No chapter filter applied (retrieving from all chapters).")
+            print("🌐 No chapter filter applied (retrieving from all chapters).")
 
+        # Create base retriever from FAISS index
         base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
-        print("Initializing Cross-Encoder for re-ranking...")
-        compressor = CrossEncoderReranker(model=HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base"), top_n=4)
-        print("Retriever with re-ranking is ready.")
-        return ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
+        
+        # Initialize cross-encoder for re-ranking
+        # BGE-Reranker provides better semantic understanding than pure vector similarity
+        print("Initializing BGE-Reranker for improved retrieval quality...")
+        reranker = HuggingFaceCrossEncoder(
+            model_name="BAAI/bge-reranker-base",  # Pre-trained re-ranking model
+            model_kwargs={"max_length": 512}  # Maximum sequence length for the model
+        )
+        
+        # Create re-ranker that will reorder the top 4 results
+        compressor = CrossEncoderReranker(
+            model=reranker,
+            top_n=4  # Only re-rank and return top 4 most relevant results
+        )
+        
+        # Combine the base retriever with the re-ranker
+        compression_retriever = ContextualCompressionRetriever(
+            base_compressor=compressor,
+            base_retriever=base_retriever
+        )
+        
+        print("✅ Retriever with re-ranking is ready.")
+        return compression_retriever
+        
     except Exception as e:
-        print(f"Error loading retriever: {e}")
+        print(f"❌ Error initializing retriever: {e}")
         sys.exit(1)
 
 def setup_qa_chain(llm, retriever):
